@@ -85,19 +85,19 @@ size_to_bytes() {
     local size_unit
     
     # Извлекаем числовое значение и единицу измерения
-    if [[ $size_str =~ ^([0-9.]+)\s*([KMGT]?B)$ ]]; then
+    if [[ $size_str =~ ^([0-9.]+)\s*(bytes?|[KMGT]?B)$ ]]; then
         size_value=${BASH_REMATCH[1]}
         size_unit=${BASH_REMATCH[2]}
     else
-        # Если не удалось распарсить, считаем что это байты
-        echo "$size_str"
+        # Если не удалось распарсить, считаем что это 0 байт
+        echo "0"
         return 0
     fi
     
     # Конвертируем в байты
     case $size_unit in
-        "B"|"")
-            echo "$size_value"
+        "B"|""|"byte"|"bytes")
+            echo "${size_value%.*}"
             ;;
         "KB")
             echo "$(($(echo "$size_value * 1024" | bc -l | cut -d. -f1)))"
@@ -127,11 +127,14 @@ check_subscriptions() {
     local subscriptions_sql="
         SELECT 
             subname,
-            subscription_status,
+            CASE 
+                WHEN pid IS NOT NULL THEN 'running'
+                ELSE 'stopped'
+            END as status,
             COALESCE(pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), latest_end_lsn)), '0 B') as lag,
-            COALESCE(sync_error, '') as sync_error,
+            COALESCE(last_msg_send_time::text, '') as last_msg_time,
             latest_end_lsn,
-            latest_end_time
+            pid
         FROM pg_stat_subscription 
         WHERE subname LIKE 'sub_from_shard_%'
         ORDER BY subname;
@@ -153,13 +156,13 @@ check_subscriptions() {
     
     echo
     echo "=== СТАТУС ПОДПИСОК НА $HOST:$PORT ==="
-    echo "Подписка                    | Статус    | Лаг        | Ошибки"
+    echo "Подписка                    | Статус    | Лаг        | PID"
     echo "----------------------------|-----------|------------|--------"
     
     local has_errors=false
     local has_high_lag=false
     
-    while IFS=$'\t' read -r subname status lag sync_error latest_end_lsn latest_end_time; do
+    while IFS=$'\t' read -r subname status lag last_msg_time latest_end_lsn pid; do
         # Проверяем статус
         local status_icon="✅"
         if [ "$status" != "running" ]; then
@@ -179,20 +182,12 @@ check_subscriptions() {
             exit_code=1
         fi
         
-        # Проверяем ошибки
-        local error_icon="✅"
-        if [ -n "$sync_error" ]; then
-            error_icon="❌"
-            has_errors=true
-            exit_code=1
-        fi
-        
         # Форматируем вывод
         printf "%-28s | %-9s | %-10s | %s\n" \
                "$subname" \
                "$status_icon $status" \
                "$lag_icon $lag" \
-               "$error_icon ${sync_error:-нет}"
+               "${pid:-нет}"
     done <<< "$subscriptions_output"
     
     echo
@@ -257,7 +252,7 @@ check_subscriptions() {
 # ---------- Основная функция ----------
 main() {
     # Проверяем аргументы
-    if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
         show_usage
         exit 0
     fi

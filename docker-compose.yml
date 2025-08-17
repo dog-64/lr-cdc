@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: app
       POSTGRES_USER: replicator
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ./init-shard-0.sql:/docker-entrypoint-initdb.d/init.sql
     command: >
@@ -34,7 +34,7 @@ services:
       POSTGRES_DB: app
       POSTGRES_USER: replicator
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - ./init-shard-1.sql:/docker-entrypoint-initdb.d/init.sql
     command: >
@@ -59,7 +59,7 @@ services:
       POSTGRES_DB: app
       POSTGRES_USER: replicator
     ports:
-      - "5434:5432"
+      - "5435:5432"
     volumes:
       - ./init-shard-2.sql:/docker-entrypoint-initdb.d/init.sql
     command: >

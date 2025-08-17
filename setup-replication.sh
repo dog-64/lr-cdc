@@ -10,7 +10,10 @@ set -euo pipefail
 # ---------- Конфигурация ----------
 SHARDS=(0 1 2)
 HOSTS=(localhost localhost localhost)
-PORTS=(5432 5433 5434)
+PORTS=(5433 5434 5435)
+# Имена контейнеров для внутренних соединений между шардами
+CONTAINER_HOSTS=(shard0 shard1 shard2)
+CONTAINER_PORTS=(5432 5432 5432)  # Внутренние порты в контейнерах
 DB=app
 USER=replicator
 PASS=replicator
@@ -82,6 +85,21 @@ execute_sql() {
     }
 }
 
+# Функция выполнения SQL команды без транзакционного блока (для подписок)
+execute_sql_no_transaction() {
+    local host=$1
+    local port=$2
+    local sql=$3
+    
+    psql -h "$host" -p "$port" -U "$USER" -d "$DB" \
+         --no-psqlrc \
+         -c "$sql" \
+         -t -A -F $'\t' 2>/dev/null || {
+        log_error "Ошибка выполнения SQL на $host:$port"
+        return 1
+    }
+}
+
 # ---------- Основная логика ----------
 main() {
     log_info "Запуск настройки logical replication для 3-нодового кластера"
@@ -124,8 +142,34 @@ main() {
         fi
     done
     
-    # 3. Создаём подписки (mesh topology)
-    log_info "Шаг 3: Создаём подписки для полного mesh..."
+    # 3. Очищаем старые слоты репликации
+    log_info "Шаг 3: Очищаем старые слоты репликации..."
+    for i in "${!SHARDS[@]}"; do
+        local shard_id=${SHARDS[i]}
+        local host=${HOSTS[i]}
+        local port=${PORTS[i]}
+        
+        log_info "Очищаем слоты репликации на shard${shard_id}..."
+        
+        # Сначала удаляем все подписки
+        local cleanup_subs_sql="
+            SELECT 'DROP SUBSCRIPTION IF EXISTS ' || subname || ';' as cmd
+            FROM pg_subscription 
+            WHERE subname LIKE 'sub_from_shard_%';
+        "
+        execute_sql "$host" "$port" "$cleanup_subs_sql" || true
+        
+        # Затем удаляем неактивные слоты репликации
+        local cleanup_slots_sql="
+            SELECT pg_drop_replication_slot(slot_name) 
+            FROM pg_replication_slots 
+            WHERE slot_name LIKE 'sub_from_shard_%' AND NOT active;
+        "
+        execute_sql "$host" "$port" "$cleanup_slots_sql" || true
+    done
+    
+    # 4. Создаём подписки (mesh topology)
+    log_info "Шаг 4: Создаём подписки для полного mesh..."
     for i in "${!SHARDS[@]}"; do
         local source_shard=${SHARDS[i]}
         local source_host=${HOSTS[i]}
@@ -139,20 +183,28 @@ main() {
                 continue
             fi
             
-            local target_host=${HOSTS[j]}
-            local target_port=${PORTS[j]}
+            local target_container_host=${CONTAINER_HOSTS[j]}
+            local target_container_port=${CONTAINER_PORTS[j]}
             
             log_info "Создаём подписку sub_from_shard_${target_shard} на shard${source_shard}..."
             
+            # Сначала удаляем подписку если существует
+            local drop_sub_sql="DROP SUBSCRIPTION IF EXISTS sub_from_shard_${target_shard};"
+            execute_sql "$source_host" "$source_port" "$drop_sub_sql" || true
+            
+            # Затем создаём новую подписку (без транзакционного блока)
+            # Используем имена контейнеров для внутренних соединений
+            # Имя слота делаем уникальным: sub_from_shard_X_to_Y
+            local slot_name="sub_from_shard_${target_shard}_to_${source_shard}"
             local create_sub_sql="
-                DROP SUBSCRIPTION IF EXISTS sub_from_shard_${target_shard};
                 CREATE SUBSCRIPTION sub_from_shard_${target_shard}
-                    CONNECTION 'host=${target_host} port=${target_port} dbname=${DB} user=${USER} password=${PASS}'
+                    CONNECTION 'host=${target_container_host} port=${target_container_port} dbname=${DB} user=${USER} password=${PASS}'
                     PUBLICATION pub_shard_${target_shard}
                     WITH (
                         create_slot = true,
+                        slot_name = '${slot_name}',
                         enabled = true,
-                        copy_data = true,
+                        copy_data = false,
                         streaming = on,
                         binary = on,
                         synchronous_commit = 'off',
@@ -160,7 +212,7 @@ main() {
                     );
             "
             
-            if execute_sql "$source_host" "$source_port" "$create_sub_sql"; then
+            if execute_sql_no_transaction "$source_host" "$source_port" "$create_sub_sql"; then
                 log_success "Подписка sub_from_shard_${target_shard} создана на shard${source_shard}"
             else
                 log_error "Не удалось создать подписку sub_from_shard_${target_shard} на shard${source_shard}"
@@ -169,8 +221,8 @@ main() {
         done
     done
     
-    # 4. Проверяем статус созданных публикаций и подписок
-    log_info "Шаг 4: Проверяем статус репликации..."
+    # 5. Проверяем статус созданных публикаций и подписок
+    log_info "Шаг 5: Проверяем статус репликации..."
     echo
     echo "=== СТАТУС ПУБЛИКАЦИЙ ==="
     for i in "${!SHARDS[@]}"; do
