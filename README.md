@@ -356,7 +356,7 @@ sub_from_shard_0             | ❌ stopped | ✅ 0 B    | нет
 sub_from_shard_1             | ✅ running | ✅ -8 bytes | 3564
 ```
 
-проверка статуса подписок на shard1 и ырфкв2
+проверка статуса подписок на shard1 и shard2:
 ```sql
 SELECT 
     subname,
@@ -449,4 +449,46 @@ CREATE TABLE t1 (t1 BIGSERIAL PRIMARY KEY);
 обновляем подписки на shard1 и shard2:
 ```sql
 ALTER SUBSCRIPTION sub_from_shard_0 REFRESH PUBLICATION;
+```
+
+После этого статусы репликации активны:
+```shell
+ ./check_lr.sh localhost 5434
+[INFO] Мониторинг logical replication для localhost:5434
+[INFO] Максимально допустимый лаг: 10 MB
+[INFO] Проверяем подписки на localhost:5434...
+
+=== СТАТУС ПОДПИСОК НА localhost:5434 ===
+Подписка                    | Статус    | Лаг        | PID
+----------------------------|-----------|------------|--------
+sub_from_shard_0             | ✅ running | ✅ -285 kB | 6311
+sub_from_shard_2             | ✅ running | ✅ 8 bytes | 3562
+
+[INFO] Проверяем слоты репликации...
+=== СЛОТЫ РЕПЛИКАЦИИ ===
+Слот                      | Тип      | Активен | Restart LSN | Confirmed Flush LSN
+--------------------------|----------|---------|-------------|---------------------
+sub_from_shard_1_to_0      | logical  | ✅     | 0/19794E8   | 0/1979520
+sub_from_shard_1_to_2      | logical  | ✅     | 0/19794E8   | 0/1979520
+
+[SUCCESS] Все подписки работают нормально, лаг в пределах нормы (< 10 MB)
+~/Sites/lr-cdc  cursor-init 22:00:18  ./check_lr.sh localhost 5435
+[INFO] Мониторинг logical replication для localhost:5435
+[INFO] Максимально допустимый лаг: 10 MB
+[INFO] Проверяем подписки на localhost:5435...
+
+=== СТАТУС ПОДПИСОК НА localhost:5435 ===
+Подписка                    | Статус    | Лаг        | PID
+----------------------------|-----------|------------|--------
+sub_from_shard_0             | ✅ running | ✅ -301 kB | 6311
+sub_from_shard_1             | ✅ running | ✅ -8 bytes | 3564
+
+[INFO] Проверяем слоты репликации...
+=== СЛОТЫ РЕПЛИКАЦИИ ===
+Слот                      | Тип      | Активен | Restart LSN | Confirmed Flush LSN
+--------------------------|----------|---------|-------------|---------------------
+sub_from_shard_2_to_0      | logical  | ✅     | 0/19794E0   | 0/1979518
+sub_from_shard_2_to_1      | logical  | ✅     | 0/19794E0   | 0/1979518
+
+[SUCCESS] Все подписки работают нормально, лаг в пределах нормы (< 10 MB)
 ```
