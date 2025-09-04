@@ -16,11 +16,6 @@ CREATE TABLE IF NOT EXISTS public.users (
 -- Это гарантирует, что все колонки будут переданы при UPDATE/DELETE
 ALTER TABLE public.users REPLICA IDENTITY FULL;
 
--- Создаём индексы для оптимизации запросов
-CREATE INDEX IF NOT EXISTS idx_users_shard_id ON public.users(shard_id);
-CREATE INDEX IF NOT EXISTS idx_users_email ON public.users(email);
-CREATE INDEX IF NOT EXISTS idx_users_created_at ON public.users(created_at);
-
 -- Вставляем тестовую строку для данного шарда
 -- Эта строка будет реплицирована на другие узлы
 INSERT INTO public.users (user_id, shard_id, email) 
